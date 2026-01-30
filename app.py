@@ -8,37 +8,44 @@ import re
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="ZE - Gestión de Ventas", layout="wide")
 
-# --- CONEXIÓN A TU HOJA DE CÁLCULO REAL ---
-# Usamos el ID de tu hoja "Catalogo" que aparece en tu captura
+# --- CONEXIÓN A TU HOJA "CATALOGO" ---
+# Link verificado de tu captura de pantalla
 url_hoja = "https://docs.google.com/spreadsheets/d/1cRFrckanV-wpOmZjgAuc_o1zJZ-S5K-ZJbgo57t9SBM/edit?usp=sharing"
 
-# Inicializamos variables para evitar el mensaje de "Cargando"
-df_actual = pd.DataFrame()
-productos_db = []
+# Inicialización de variables para evitar errores visuales
+df_productos = pd.DataFrame()
+productos_lista = []
 
 try:
+    # Creamos la conexión
     conn = st.connection("gsheets", type=GSheetsConnection)
-    # Especificamos que lea la "Hoja 1" que es donde tienes los datos
-    df_actual = conn.read(spreadsheet=url_hoja, worksheet="Hoja 1", ttl=0)
-    # Limpiamos filas vacías para que no den error
-    df_actual = df_actual.dropna(subset=['nombre'])
-    productos_db = df_actual.to_dict('records')
+    
+    # Intentamos leer la "Hoja 1" que es la que tienes en tu captura
+    # ttl=0 obliga a la app a buscar datos frescos siempre
+    df_productos = conn.read(spreadsheet=url_hoja, worksheet="Hoja 1", ttl=0)
+    
+    # Limpiamos datos: eliminamos filas que no tengan nombre para evitar errores
+    df_productos = df_productos.dropna(subset=['nombre'])
+    productos_lista = df_productos.to_dict('records')
 except Exception as e:
-    st.error(f"Error de conexión: {e}")
-    # Producto de respaldo si la conexión falla
-    productos_db = [{"id": "001", "nombre": "Error al conectar", "precio": 0, "img": ""}]
+    st.error("⚠️ La aplicación no pudo leer tu Google Sheets.")
+    st.info("Revisa que en el botón 'Compartir' de la hoja diga: 'Cualquier persona con el enlace puede leer'.")
+    # Datos de emergencia para que la página no salga en blanco
+    productos_lista = [{"id": "---", "nombre": "Esperando conexión...", "precio": 0, "img": ""}]
 
-# --- FUNCIONES ---
-def corregir_link_drive(url):
-    """Convierte links de Drive en fotos visibles"""
+# --- FUNCIÓN PARA IMÁGENES DE DRIVE ---
+def convertir_link_directo(url):
+    """Transforma el link de compartir en una imagen visible"""
     if isinstance(url, str) and "drive.google.com" in url:
-        drive_match = re.search(r'id=([a-zA-Z0-9_-]+)|/d/([a-zA-Z0-9_-]+)', url)
-        if drive_match:
-            file_id = drive_match.group(1) or drive_match.group(2)
+        id_match = re.search(r'id=([a-zA-Z0-9_-]+)|/d/([a-zA-Z0-9_-]+)', url)
+        if id_match:
+            file_id = id_match.group(1) or id_match.group(2)
+            # Formato thumbnail: es el más estable para Streamlit
             return f"https://drive.google.com/thumbnail?id={file_id}&sz=w1000"
     return url
 
-def generar_pdf(nombre_cliente, items):
+# --- FUNCIÓN FACTURA PDF ---
+def crear_factura(cliente, lista_items):
     pdf = FPDF()
     pdf.add_page()
     try: 
@@ -50,69 +57,88 @@ def generar_pdf(nombre_cliente, items):
     pdf.cell(0, 10, "FACTURA DE VENTA - ZE", ln=True, align='C')
     pdf.set_font("Arial", size=11)
     pdf.cell(0, 10, f"Fecha: {datetime.date.today()}", ln=True)
-    pdf.cell(0, 10, f"Cliente: {nombre_cliente}", ln=True)
+    pdf.cell(0, 10, f"Cliente: {cliente}", ln=True)
     pdf.ln(10)
+    
+    # Encabezados de tabla
     pdf.set_fill_color(240, 240, 240)
+    pdf.set_font("Arial", 'B', 10)
     pdf.cell(30, 10, " Cod.", border=1, fill=True)
     pdf.cell(110, 10, " Concepto", border=1, fill=True)
     pdf.cell(40, 10, " Precio", border=1, ln=True, fill=True)
-    total = 0
-    for item in items:
-        p_precio = float(item.get('precio', 0))
+    
+    total_final = 0
+    pdf.set_font("Arial", size=10)
+    for item in lista_items:
+        val_precio = float(item.get('precio', 0))
         pdf.cell(30, 10, f" {item.get('id', 'N/A')}", border=1)
         pdf.cell(110, 10, f" {item.get('nombre', 'Item')}", border=1)
-        pdf.cell(40, 10, f" ${p_precio}", border=1, ln=True)
-        total += p_precio
+        pdf.cell(40, 10, f" ${val_precio}", border=1, ln=True)
+        total_final += val_precio
+        
     pdf.ln(5)
     pdf.set_font("Arial", 'B', 12)
     pdf.cell(140, 10, " TOTAL A PAGAR", border=0)
-    pdf.cell(40, 10, f" ${total}", border=0, ln=True)
+    pdf.cell(40, 10, f" ${total_final}", border=0, ln=True)
     return pdf.output(dest='S').encode('latin-1')
 
-# --- INTERFAZ ---
+# --- INTERFAZ DE USUARIO ---
 if 'carrito' not in st.session_state:
     st.session_state.carrito = []
 
-col_logo, _ = st.columns([1, 4])
-with col_logo:
+# Cabecera con Logo
+col_l, _ = st.columns([1, 4])
+with col_l:
     st.image('logo.jpg', width=150)
 
 st.title("Catálogo Digital ZE")
-c1, c2 = st.columns([2, 1])
+st.write("Selecciona tus productos para generar la factura.")
 
-with c1:
-    if productos_db:
-        cols_cat = st.columns(2)
-        for i, row in enumerate(productos_db):
-            with cols_cat[i % 2]:
-                url_img = corregir_link_drive(str(row.get('img', '')))
-                if url_img:
-                    st.image(url_img, use_container_width=True)
+c_catalogo, c_carrito = st.columns([2, 1])
+
+with c_catalogo:
+    if productos_lista:
+        grid = st.columns(2)
+        for i, prod in enumerate(productos_lista):
+            with grid[i % 2]:
+                # Procesar imagen de Drive
+                foto = convertir_link_directo(str(prod.get('img', '')))
+                if foto:
+                    st.image(foto, use_container_width=True)
                 else:
                     st.image("https://via.placeholder.com/150?text=Sin+Foto", use_container_width=True)
                 
-                st.subheader(row.get('nombre', 'Producto'))
-                st.write(f"Código: {row.get('id', '000')} | **${row.get('precio', 0)}**")
+                st.subheader(prod.get('nombre', 'Cargando...'))
+                st.write(f"Código: {prod.get('id', '000')} | **${prod.get('precio', 0)}**")
                 
-                if st.button(f"Añadir al pedido", key=f"btn_{i}"):
-                    st.session_state.carrito.append(row)
-                    st.toast(f"Agregado: {row['nombre']}")
+                if st.button(f"Agregar al pedido", key=f"btn_add_{i}"):
+                    st.session_state.carrito.append(prod)
+                    st.toast(f"Añadido: {prod['nombre']}")
     else:
-        st.info("Cargando productos desde la hoja...")
+        st.info("Buscando productos en tu hoja 'Catalogo'...")
 
-with c2:
+with c_carrito:
     st.subheader("🛒 Tu Pedido")
     if st.session_state.carrito:
-        total_venta = sum(float(item.get('precio', 0)) for item in st.session_state.carrito)
-        for item in st.session_state.carrito:
-            st.text(f"• {item.get('nombre')} (${item.get('precio')})")
-        st.write(f"### Total: ${total_venta}")
-        nombre_cli = st.text_input("Nombre del cliente")
-        if nombre_cli:
-            pdf_bytes = generar_pdf(nombre_cli, st.session_state.carrito)
-            st.download_button("📥 Descargar Factura PDF", data=pdf_bytes, file_name=f"ZE_{nombre_cli}.pdf")
-        if st.button("Vaciar Pedido"):
+        suma_total = 0
+        for p in st.session_state.carrito:
+            st.text(f"• {p['nombre']} (${p['precio']})")
+            suma_total += float(p['precio'])
+        
+        st.write(f"### Total: ${suma_total}")
+        
+        nombre_factura = st.text_input("Nombre del cliente")
+        if nombre_factura:
+            pdf_out = crear_factura(nombre_factura, st.session_state.carrito)
+            st.download_button(
+                label="📥 Descargar Factura PDF",
+                data=pdf_out,
+                file_name=f"Factura_ZE_{nombre_factura}.pdf",
+                mime="application/pdf"
+            )
+            
+        if st.button("Vaciar Carrito"):
             st.session_state.carrito = []
             st.rerun()
     else:
-        st.info("El pedido está vacío")
+        st.info("El pedido está vacío.")
