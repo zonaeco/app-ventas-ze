@@ -8,8 +8,24 @@ import re
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="ZE - Gestión de Ventas", layout="wide")
 
-# SUSTITUYE POR TU LINK REAL (Debe tener permiso de EDICIÓN para cualquier persona con el enlace)
-url_hoja = "https://docs.google.com/spreadsheets/d/TU_ID_DE_HOJA/edit?usp=sharing"
+# --- CONEXIÓN A GOOGLE SHEETS ---
+# ¡IMPORTANTE! Reemplaza este link por el tuyo y asegúrate de que sea PÚBLICO
+url_hoja = "https://docs.google.com/spreadsheets/d/TU_ID_AQUÍ/edit?usp=sharing"
+
+# Inicializamos variables para evitar errores de carga
+df_actual = pd.DataFrame(columns=['id', 'nombre', 'precio', 'img'])
+
+try:
+    conn = st.connection("gsheets", type=GSheetsConnection)
+    df_actual = conn.read(spreadsheet=url_hoja)
+except Exception as e:
+    st.error("⚠️ Error de conexión: No se pudo leer la hoja de Google Sheets.")
+    st.info("Asegúrate de que la hoja esté compartida como 'Cualquier persona con el enlace puede leer'.")
+    # Datos de respaldo para que la app no se rompa
+    df_actual = pd.DataFrame([
+        {"id": "001", "nombre": "Imán Prueba", "precio": 12000, "img": ""},
+        {"id": "002", "nombre": "Corte Láser", "precio": 35000, "img": ""}
+    ])
 
 # --- FUNCIONES ---
 def corregir_link_drive(url):
@@ -38,77 +54,71 @@ def generar_pdf(nombre_cliente, items):
     pdf.cell(40, 10, " Precio", border=1, ln=True, fill=True)
     total = 0
     for item in items:
+        p_precio = float(item.get('precio', 0))
         pdf.cell(30, 10, f" {item.get('id', 'N/A')}", border=1)
         pdf.cell(110, 10, f" {item.get('nombre', 'Item')}", border=1)
-        pdf.cell(40, 10, f" ${item.get('precio', 0)}", border=1, ln=True)
-        total += float(item.get('precio', 0))
+        pdf.cell(40, 10, f" ${p_precio}", border=1, ln=True)
+        total += p_precio
     pdf.ln(5)
     pdf.cell(140, 10, " TOTAL A PAGAR", border=0)
     pdf.cell(40, 10, f" ${total}", border=0, ln=True)
     return pdf.output(dest='S').encode('latin-1')
 
-# --- CONEXIÓN Y CARGA ---
-conn = st.connection("gsheets", type=GSheetsConnection)
-
-# Cargamos los datos actuales
-df_actual = conn.read(spreadsheet=url_hoja)
-
+# --- ESTADOS DE SESIÓN ---
 if 'carrito' not in st.session_state:
     st.session_state.carrito = []
 if 'admin_mode' not in st.session_state:
     st.session_state.admin_mode = False
 
-# --- CABECERA ---
+# --- INTERFAZ ---
 col_logo, _ = st.columns([1, 4])
 with col_logo:
     if st.button("🔑"):
         st.session_state.admin_mode = not st.session_state.admin_mode
     st.image('logo.jpg', width=150)
 
-# --- PANEL ADMIN (PARA AGREGAR Y GUARDAR) ---
+# Panel Administrativo
 if st.session_state.admin_mode:
     clave = st.text_input("Clave maestra", type="password")
     if clave == "1234":
-        st.subheader("Gestión de Inventario Real")
-        # Editor de tabla en vivo
+        st.subheader("🛠️ Gestión de Inventario")
         df_editado = st.data_editor(df_actual, num_rows="dynamic", use_container_width=True)
-        
-        if st.button("💾 Guardar cambios en Google Sheets"):
+        if st.button("💾 Guardar cambios"):
             try:
                 conn.update(spreadsheet=url_hoja, data=df_editado)
-                st.success("¡Datos actualizados con éxito!")
+                st.success("¡Guardado!")
                 st.rerun()
-            except Exception as e:
-                st.error(f"Error al guardar: Asegúrate de que la hoja tenga permisos de EDITOR.")
+            except:
+                st.error("Error al guardar. Verifica los permisos de EDITOR en la hoja.")
     st.divider()
 
-# --- CATÁLOGO ---
+# Catálogo Digital
 st.title("Catálogo Digital ZE")
 c1, c2 = st.columns([2, 1])
 
 with c1:
-    columnas = st.columns(2)
+    cols = st.columns(2)
     for i, row in df_actual.iterrows():
-        with columnas[i % 2]:
-            img_url = corregir_link_drive(str(row['img']))
+        with cols[i % 2]:
+            img_url = corregir_link_drive(str(row.get('img', '')))
             st.image(img_url if img_url else "https://via.placeholder.com/150", use_container_width=True)
-            st.subheader(row['nombre'])
-            st.write(f"Código: {row['id']} | **${row['precio']}**")
+            st.subheader(row.get('nombre', 'Producto'))
+            st.write(f"Código: {row.get('id', '000')} | **${row.get('precio', 0)}**")
             if st.button(f"Añadir", key=f"add_{i}"):
                 st.session_state.carrito.append(row.to_dict())
-                st.toast(f"Añadido: {row['nombre']}")
+                st.toast("Agregado")
 
 with c2:
     st.subheader("🛒 Pedido")
     if st.session_state.carrito:
-        total_p = sum(float(item['precio']) for item in st.session_state.carrito)
+        total_p = sum(float(item.get('precio', 0)) for item in st.session_state.carrito)
         for item in st.session_state.carrito:
-            st.text(f"• {item['nombre']} (${item['precio']})")
+            st.text(f"• {item.get('nombre')} (${item.get('precio')})")
         st.write(f"### Total: ${total_p}")
-        nom_c = st.text_input("Cliente")
+        nom_c = st.text_input("Nombre del cliente")
         if nom_c:
             pdf_data = generar_pdf(nom_c, st.session_state.carrito)
-            st.download_button("Descargar Factura", data=pdf_data, file_name=f"ZE_{nom_c}.pdf")
-        if st.button("Limpiar"):
+            st.download_button("📥 Descargar Factura", data=pdf_data, file_name=f"ZE_{nom_c}.pdf")
+        if st.button("Vaciar"):
             st.session_state.carrito = []
             st.rerun()
