@@ -9,40 +9,40 @@ import re
 st.set_page_config(page_title="ZE - Gestión de Ventas", layout="wide")
 
 # --- CONEXIÓN A TU HOJA DE CÁLCULO REAL ---
-# He actualizado el link con el ID de tu hoja "Catalogo"
+# Usamos el ID de tu hoja "Catalogo" que aparece en tu captura
 url_hoja = "https://docs.google.com/spreadsheets/d/1cRFrckanV-wpOmZjgAuc_o1zJZ-S5K-ZJbgo57t9SBM/edit?usp=sharing"
 
-# Inicializamos variables para evitar errores visuales
+# Inicializamos variables para evitar el mensaje de "Cargando"
 df_actual = pd.DataFrame()
 productos_db = []
 
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
-    # Leemos la hoja con tus datos reales
-    df_actual = conn.read(spreadsheet=url_hoja, ttl=5) # ttl=5 para que refresque rápido
+    # Especificamos que lea la "Hoja 1" que es donde tienes los datos
+    df_actual = conn.read(spreadsheet=url_hoja, worksheet="Hoja 1", ttl=0)
+    # Limpiamos filas vacías para que no den error
+    df_actual = df_actual.dropna(subset=['nombre'])
     productos_db = df_actual.to_dict('records')
 except Exception as e:
-    st.error("⚠️ Error de conexión con Google Sheets. Revisa los permisos de la hoja.")
-    # Datos de respaldo por si falla la red
-    productos_db = [{"id": "001", "nombre": "Cargando...", "precio": 0, "img": ""}]
+    st.error(f"Error de conexión: {e}")
+    # Producto de respaldo si la conexión falla
+    productos_db = [{"id": "001", "nombre": "Error al conectar", "precio": 0, "img": ""}]
 
-# --- FUNCIÓN PARA IMÁGENES DE DRIVE ---
+# --- FUNCIONES ---
 def corregir_link_drive(url):
-    """Transforma links de Drive en imágenes visibles directamente"""
+    """Convierte links de Drive en fotos visibles"""
     if isinstance(url, str) and "drive.google.com" in url:
         drive_match = re.search(r'id=([a-zA-Z0-9_-]+)|/d/([a-zA-Z0-9_-]+)', url)
         if drive_match:
             file_id = drive_match.group(1) or drive_match.group(2)
-            # Usamos formato thumbnail para que la foto aparezca en el catálogo
             return f"https://drive.google.com/thumbnail?id={file_id}&sz=w1000"
     return url
 
-# --- FUNCIÓN PARA FACTURA PDF ---
 def generar_pdf(nombre_cliente, items):
     pdf = FPDF()
     pdf.add_page()
     try: 
-        pdf.image('logo.jpg', x=10, y=8, w=30) # Usa el logo que ya tienes en GitHub
+        pdf.image('logo.jpg', x=10, y=8, w=30)
     except: 
         pass
     pdf.ln(20)
@@ -85,7 +85,6 @@ with c1:
         cols_cat = st.columns(2)
         for i, row in enumerate(productos_db):
             with cols_cat[i % 2]:
-                # Mostramos la FOTO del producto
                 url_img = corregir_link_drive(str(row.get('img', '')))
                 if url_img:
                     st.image(url_img, use_container_width=True)
@@ -107,14 +106,11 @@ with c2:
         total_venta = sum(float(item.get('precio', 0)) for item in st.session_state.carrito)
         for item in st.session_state.carrito:
             st.text(f"• {item.get('nombre')} (${item.get('precio')})")
-        
         st.write(f"### Total: ${total_venta}")
         nombre_cli = st.text_input("Nombre del cliente")
-        
         if nombre_cli:
             pdf_bytes = generar_pdf(nombre_cli, st.session_state.carrito)
             st.download_button("📥 Descargar Factura PDF", data=pdf_bytes, file_name=f"ZE_{nombre_cli}.pdf")
-            
         if st.button("Vaciar Pedido"):
             st.session_state.carrito = []
             st.rerun()
